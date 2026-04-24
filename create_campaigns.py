@@ -36,7 +36,7 @@ def clean_bounced_contacts():
             "https://api.brevo.com/v3/contacts",
             headers=BREVO_HEADERS,
             params={"limit": limit, "offset": offset, "sort": "desc"},
-            timeout=15,
+            timeout=60,
         )
         if not resp.ok:
             log.error("Brevo contacts error: %s", resp.text)
