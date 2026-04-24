@@ -323,18 +323,21 @@ def build_newsletter_html(properties: list[dict], tip_title: str = "", tip_body:
     return html.replace("Abril 2025", mes)
 
 
-def create_brevo_draft(name: str, subject: str, html: str) -> dict:
+def create_brevo_draft(name: str, subject: str, html: str, scheduled_at: str | None = None) -> dict:
+    payload = {
+        "name": name,
+        "subject": subject,
+        "sender": {"name": BREVO_SENDER_NAME, "email": BREVO_SENDER_EMAIL},
+        "type": "classic",
+        "htmlContent": html,
+        "recipients": {"listIds": [BREVO_LIST_ID]},
+    }
+    if scheduled_at:
+        payload["scheduledAt"] = scheduled_at
     resp = requests.post(
         "https://api.brevo.com/v3/emailCampaigns",
         headers=BREVO_HEADERS,
-        json={
-            "name": name,
-            "subject": subject,
-            "sender": {"name": BREVO_SENDER_NAME, "email": BREVO_SENDER_EMAIL},
-            "type": "classic",
-            "htmlContent": html,
-            "recipients": {"listIds": [BREVO_LIST_ID]},
-        },
+        json=payload,
         timeout=15,
     )
     if not resp.ok:
@@ -346,6 +349,14 @@ def create_brevo_draft(name: str, subject: str, html: str) -> dict:
 def run():
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
     today = datetime.now().strftime("%d/%m/%Y")
+    # Schedule: novedades Monday, newsletter Wednesday, leads Friday at 9am
+    now = datetime.now()
+    # Find next Monday
+    days_to_monday = (7 - now.weekday()) % 7 or 7
+    monday = now.replace(hour=9, minute=0, second=0, microsecond=0) + timedelta(days=days_to_monday)
+    wednesday = monday + timedelta(days=2)
+    friday = monday + timedelta(days=4)
+    fmt = "%Y-%m-%dT%H:%M:%S+00:00"
 
     # Limpiar rebotes de Brevo en Supabase
     try:
@@ -364,8 +375,8 @@ def run():
             subject = "Las propiedades más destacadas de esta semana 🏡"
             intro = ""
         html = build_novedades_html(props, intro)
-        r = create_brevo_draft(name=f"Novedades {today}", subject=subject, html=html)
-        log.info("Campaña novedades creada: id=%s", r.get("id"))
+        r = create_brevo_draft(name=f"Novedades {today}", subject=subject, html=html, scheduled_at=monday.strftime(fmt))
+        log.info("Campaña novedades creada: id=%s, programada: %s", r.get("id"), monday.strftime(fmt))
     else:
         log.warning("Sin propiedades para campaña de novedades")
 
@@ -382,8 +393,9 @@ def run():
         name=f"Newsletter {today}",
         subject=f"El mercado inmobiliario · {datetime.now().strftime('%B %Y').capitalize()} 📊",
         html=newsletter_html,
+        scheduled_at=wednesday.strftime(fmt),
     )
-    log.info("Campaña newsletter creada: id=%s", r.get("id"))
+    log.info("Campaña newsletter creada: id=%s, programada: %s", r.get("id"), wednesday.strftime(fmt))
 
     # 3. Leads (estático)
     with open(os.path.join(os.path.dirname(__file__), "templates", "reynolds-email-vender-alquilar.html"), encoding="utf-8") as f:
@@ -392,8 +404,9 @@ def run():
         name=f"Captación leads {today}",
         subject="¿Querés vender o alquilar tu propiedad? 🏠",
         html=leads_html,
+        scheduled_at=friday.strftime(fmt),
     )
-    log.info("Campaña leads creada: id=%s", r.get("id"))
+    log.info("Campaña leads creada: id=%s, programada: %s", r.get("id"), friday.strftime(fmt))
 
 
 if __name__ == "__main__":
