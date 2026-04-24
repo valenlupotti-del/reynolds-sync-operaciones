@@ -89,15 +89,26 @@ def send_email(to_email: str, subject: str, html_body: str):
 
 
 def parse_tally_payload(payload: dict) -> dict:
-    """Flatten Tally webhook fields into a simple key→value dict."""
     data = {}
     fields = payload.get("data", {}).get("fields", [])
+    log.info("Tally fields received: %s", [f.get("label") for f in fields])
     for field in fields:
         label = field.get("label", "")
         value = field.get("value")
-        # Tally sometimes wraps single values in a list
+        options = field.get("options", [])
+
+        # Resolve UUID option IDs to text labels
+        if options and value is not None:
+            option_map = {o["id"]: o["text"] for o in options if "id" in o and "text" in o}
+            if isinstance(value, list):
+                value = [option_map.get(v, v) for v in value]
+            else:
+                value = option_map.get(value, value)
+
+        # Unwrap single-item lists
         if isinstance(value, list) and len(value) == 1:
             value = value[0]
+
         key = TALLY_FIELD_MAP.get(label)
         if key:
             data[key] = value
