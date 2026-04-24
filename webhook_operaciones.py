@@ -126,6 +126,19 @@ def insert_operacion(data: dict) -> dict | None:
             except (ValueError, TypeError):
                 row.pop(field, None)
 
+    # Calculate comision
+    tipo = (row.get("tipo_operacion") or "").lower()
+    pct = row.get("porcentaje_comision")
+    if pct and "alquiler" in tipo:
+        mensual = row.get("monto_mensual")
+        plazo = row.get("plazo")
+        if mensual and plazo:
+            row["comision"] = round(mensual * plazo * pct / 100, 2)
+    elif pct and "venta" in tipo:
+        monto = row.get("monto")
+        if monto:
+            row["comision"] = round(monto * pct / 100, 2)
+
     resp = requests.post(
         f"{SUPABASE_URL}/rest/v1/operaciones",
         headers=headers,
