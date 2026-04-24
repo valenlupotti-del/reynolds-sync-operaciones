@@ -11,6 +11,7 @@ from __future__ import annotations
 import sys
 import re
 import json
+import html as html_lib
 import logging
 import statistics
 import unicodedata
@@ -43,7 +44,6 @@ OPERACION_SLUG = {
     "venta":    "en-venta",
     "alquiler": "en-alquiler",
     "alq":      "en-alquiler",
-    "rent":     "en-alquiler",
 }
 
 
@@ -70,66 +70,150 @@ def fetch_page(url: str) -> str | None:
     try:
         resp = requests.get(url, headers=HEADERS, timeout=20)
         if resp.status_code == 403:
-            log.error("Blocked by Cloudflare: %s", url)
+            log.error("Blocked: %s", url)
             return None
         if resp.status_code == 404:
             return None
         resp.raise_for_status()
         return resp.text
     except requests.RequestException as e:
-        log.error("Fetch error for %s: %s", url, e)
+        log.error("Fetch error %s: %s", url, e)
         return None
+
+
+def _get_hidden(html: str, name: str) -> str | None:
+    m = re.search(rf'<input[^>]+name="{name}"[^>]+value="([^"]*)"', html)
+    if not m:
+        m = re.search(rf'<input[^>]+value="([^"]*)"[^>]+name="{name}"', html)
+    return html_lib.unescape(m.group(1)) if m else None
+
+
+def _strip_tags(s: str) -> str:
+    return re.sub(r"<[^>]+>", " ", s).strip()
+
+
+def scrape_listing_url(url: str) -> dict | None:
+    """
+    Scrape a single Argenprop listing URL and return structured property data.
+    Returns dict with: url, precio, moneda, superficie, barrio, direccion, ambientes, tipo, operacion
+    Returns None if the page can't be parsed.
+    """
+    # Normalize: accept full URLs or relative paths
+    if url.startswith("/"):
+        url = "https://www.argenprop.com" + url
+    if not url.startswith("http"):
+        return None
+
+    html = fetch_page(url)
+    if not html:
+        return None
+
+    # --- Price and currency from hidden inputs (most reliable) ---
+    precio_raw = _get_hidden(html, "Precio")
+    moneda = _get_hidden(html, "Moneda") or "USD"
+    if not precio_raw:
+        return None
+    try:
+        precio = float(precio_raw.replace(".", "").replace(",", ""))
+    except ValueError:
+        return None
+
+    # --- Surface from features list ---
+    # Pattern: "90 m&#xB2; Cubierta" or "90 m2"
+    surf_m = re.search(r"(\d+)\s*m&#xB2;|(\d+)\s*m[²2]", html, re.IGNORECASE)
+    superficie = None
+    if surf_m:
+        raw = surf_m.group(1) or surf_m.group(2)
+        try:
+            superficie = float(raw)
+        except ValueError:
+            pass
+
+    # If not in page, try ShareDescription "90m2"
+    if not superficie:
+        desc = _get_hidden(html, "ShareDescription") or ""
+        sm = re.search(r"(\d+)\s*m2", desc, re.IGNORECASE)
+        if sm:
+            try:
+                superficie = float(sm.group(1))
+            except ValueError:
+                pass
+
+    # --- Barrio from breadcrumb (5th item: Argenprop > tipo > operacion > ciudad > barrio) ---
+    breadcrumbs = re.findall(r'<li[^>]*breadcrumb[^>]*>(.*?)</li>', html, re.DOTALL)
+    barrio_raw = breadcrumbs[4] if len(breadcrumbs) > 4 else (breadcrumbs[-1] if breadcrumbs else "")
+    barrio = _strip_tags(barrio_raw).strip()
+
+    # --- Address from H2 ---
+    h2_m = re.search(r'<h2[^>]*class="[^"]*title[^"]*"[^>]*>(.*?)</h2>', html, re.DOTALL)
+    direccion = _strip_tags(h2_m.group(1)).strip() if h2_m else ""
+    if not direccion:
+        # Fallback: parse from ShareTitle "... Arevalo 1900 piso 7, Barrio | Argenprop"
+        title = _get_hidden(html, "ShareTitle") or ""
+        addr_m = re.search(r",\s*([A-Za-záéíóúÁÉÍÓÚñÑ\s\d]+\d+[^\|,]*)", title)
+        if addr_m:
+            direccion = addr_m.group(1).strip()
+
+    # --- Ambientes from features section ---
+    amb_m = re.search(r"Cant\.\s*Ambientes[^>]*>.*?(\d+)", html, re.DOTALL | re.IGNORECASE)
+    if not amb_m:
+        amb_m = re.search(r"(\d+)\s*ambientes?", html, re.IGNORECASE)
+    ambientes = int(amb_m.group(1)) if amb_m else None
+
+    # --- Tipo and operacion from breadcrumb ---
+    tipo = _strip_tags(breadcrumbs[1]).strip() if len(breadcrumbs) > 1 else "Propiedad"
+    operacion = _strip_tags(breadcrumbs[2]).strip() if len(breadcrumbs) > 2 else "Venta"
+
+    usd_m2 = round(precio / superficie) if superficie and precio > 0 else None
+
+    return {
+        "url":        url,
+        "tipo":       tipo,
+        "operacion":  operacion,
+        "barrio":     barrio,
+        "direccion":  direccion,
+        "precio":     int(precio),
+        "moneda":     moneda,
+        "superficie": superficie,
+        "ambientes":  ambientes,
+        "usd_m2":     usd_m2,
+    }
 
 
 def extract_listings_from_html(html: str) -> list[dict]:
     """
-    Argenprop-specific extraction.
-
+    Argenprop search results page extraction.
     Each listing card wraps its price in <div class="card__monetary-values">.
-    Splitting on that boundary ensures price + surface belong to the same card.
-    Surface appears as HTML entity: 90 m&#xB2; (= m squared).
     """
     listings = []
-
     parts = html.split("card__monetary-values")
 
-    for part in parts[1:]:  # first part is CSS/header
-        # Price: <span class="card__currency">USD</span> 350.000
+    for part in parts[1:]:
         price_m = re.search(
             r'<span class="card__currency">USD</span>\s*([\d\.\,]+)',
             part,
         )
         if not price_m:
             continue
-
         raw_price = price_m.group(1).replace(".", "").replace(",", "")
         try:
             price = float(raw_price)
         except ValueError:
             continue
-
         if not (5_000 < price < 50_000_000):
             continue
 
-        # Surface: HTML-encoded m2 entity (&#xB2;) or plain m2/m²
-        surf_m = re.search(
-            r'(\d+(?:[,\.]\d+)?)\s*(?:m&#xB2;|m[2\xb2])',
-            part,
-            re.IGNORECASE,
-        )
+        surf_m = re.search(r'(\d+(?:[,\.]\d+)?)\s*(?:m&#xB2;|m[2\xb2])', part, re.IGNORECASE)
         if not surf_m:
             continue
-
-        raw_surf = surf_m.group(1).replace(",", ".")
         try:
-            surface = float(raw_surf)
+            surface = float(surf_m.group(1).replace(",", "."))
         except ValueError:
             continue
-
         if not (12 < surface < 3000):
             continue
 
-        listings.append({"price": price, "surface": surface, "source": "argenprop"})
+        listings.append({"price": price, "surface": surface})
 
     return listings
 
@@ -162,17 +246,15 @@ def compute_stats(listings: list[dict]) -> dict | None:
             ratio = price / surface
             if 300 < ratio < 20_000:
                 ratios.append(ratio)
-
     if not ratios:
         return None
-
     return {
         "count": len(ratios),
         "promedio_usd_m2": round(statistics.mean(ratios)),
-        "mediana_usd_m2": round(statistics.median(ratios)),
-        "minimo_usd_m2": round(min(ratios)),
-        "maximo_usd_m2": round(max(ratios)),
-        "desvio_usd_m2": round(statistics.stdev(ratios)) if len(ratios) > 1 else 0,
+        "mediana_usd_m2":  round(statistics.median(ratios)),
+        "minimo_usd_m2":   round(min(ratios)),
+        "maximo_usd_m2":   round(max(ratios)),
+        "desvio_usd_m2":   round(statistics.stdev(ratios)) if len(ratios) > 1 else 0,
     }
 
 
@@ -182,42 +264,28 @@ def tasacion(
     operacion: str = "venta",
     superficie: float | None = None,
 ) -> dict:
-    """
-    Main entry point.
-
-    Args:
-        barrio: neighborhood name (e.g. "Palermo", "San Isidro")
-        tipo: property type (departamento, casa, ph, etc.)
-        operacion: venta or alquiler
-        superficie: optional m2 to calculate estimated value
-
-    Returns dict with keys: barrio, tipo, operacion, stats, estimado (if superficie given)
-    """
     listings = scrape_barrio(tipo, operacion, barrio, max_pages=3)
     stats = compute_stats(listings)
-
     result: dict = {
         "barrio": barrio,
         "tipo": tipo,
         "operacion": operacion,
         "listings_analizados": len(listings),
     }
-
     if stats:
         result["stats"] = stats
         if superficie and superficie > 0:
             avg = stats["promedio_usd_m2"]
             med = stats["mediana_usd_m2"]
             result["estimado"] = {
-                "superficie_m2": superficie,
-                "valor_por_promedio": round(avg * superficie),
-                "valor_por_mediana": round(med * superficie),
-                "rango_min": round(stats["minimo_usd_m2"] * superficie),
-                "rango_max": round(stats["maximo_usd_m2"] * superficie),
+                "superficie_m2":       superficie,
+                "valor_por_promedio":  round(avg * superficie),
+                "valor_por_mediana":   round(med * superficie),
+                "rango_min":           round(stats["minimo_usd_m2"] * superficie),
+                "rango_max":           round(stats["maximo_usd_m2"] * superficie),
             }
     else:
-        result["error"] = "No se pudieron obtener datos suficientes de Argenprop"
-
+        result["error"] = "No se pudieron obtener datos de Argenprop"
     return result
 
 
@@ -253,12 +321,10 @@ def format_report(r: dict) -> str:
 
 if __name__ == "__main__":
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
-
     barrio    = sys.argv[1] if len(sys.argv) > 1 else "Palermo"
     tipo      = sys.argv[2] if len(sys.argv) > 2 else "departamento"
     operacion = sys.argv[3] if len(sys.argv) > 3 else "venta"
     superficie = float(sys.argv[4]) if len(sys.argv) > 4 else None
-
     result = tasacion(barrio, tipo, operacion, superficie)
     print(format_report(result))
     print("\nJSON:")
