@@ -49,7 +49,7 @@ def save_last_sync_date():
 def fetch_tokko_contacts(updated_since: str, offset: int = 0) -> dict:
     resp = requests.get(
         "https://www.tokkobroker.com/api/v1/contact/",
-        params={"key": TOKKO_KEY, "format": "json", "limit": 100, "offset": offset, "updated_since": updated_since},
+        params={"key": TOKKO_KEY, "format": "json", "limit": 50, "offset": offset, "updated_since": updated_since},
         timeout=30,
     )
     resp.raise_for_status()
@@ -73,7 +73,7 @@ def map_contact(c: dict) -> dict:
         "cliente_de":          "Propietario" if c.get("is_owner") else ("Empresa" if c.get("is_company") else "Cliente"),
         "origen_contacto":     origen_tag["name"] if origen_tag else None,
         "fecha_creacion":      c["created_at"].split("T")[0] if c.get("created_at") else None,
-        "updated_at":          datetime.now().isoformat(),
+        "ultima_actualizacion": datetime.now().isoformat(),
     }
 
 
@@ -111,7 +111,7 @@ def upsert_brevo_batch(contacts: list[dict]):
 
     payload = {
         "listIds":       [BREVO_LIST_ID],
-        "contacts":      brevo_contacts,
+        "jsonBody":      brevo_contacts,
         "updateEnabled": True,
     }
 
@@ -178,10 +178,10 @@ def run():
                     log.error("Brevo batch error: %s", e)
                 brevo_batch = []
 
-        if len(raw_contacts) < 100:
+        if len(raw_contacts) < 50:
             break
 
-        offset += 100
+        offset += 50
         log.info("Fetched %d contacts so far...", total)
 
     # Flush remaining
