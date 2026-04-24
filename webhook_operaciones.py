@@ -15,6 +15,7 @@ from email import encoders
 from flask import Flask, request, jsonify
 import requests
 import sync_properties
+import sync_contacts
 import create_campaigns
 import tasacion as tasacion_module
 
@@ -1006,8 +1007,23 @@ def tasacion_enviar():
 
 def properties_sync_loop():
     while True:
-        sync_properties.run()
-        time.sleep(3600)  # every hour
+        try:
+            sync_properties.run()
+        except Exception:
+            log.exception("Error in properties sync")
+        time.sleep(3600)
+
+
+def contacts_sync_loop():
+    time.sleep(60)  # wait 1 min after startup before first run
+    while True:
+        try:
+            log.info("Starting contacts sync...")
+            sync_contacts.run()
+            log.info("Contacts sync complete")
+        except Exception:
+            log.exception("Error in contacts sync")
+        time.sleep(3600)
 
 
 def campaigns_loop():
@@ -1019,11 +1035,12 @@ def campaigns_loop():
                 create_campaigns.run()
             except Exception:
                 log.exception("Error creating campaigns")
-        time.sleep(3600)  # check every hour
+        time.sleep(3600)
 
 
 if __name__ == "__main__":
     threading.Thread(target=properties_sync_loop, daemon=True).start()
+    threading.Thread(target=contacts_sync_loop, daemon=True).start()
     threading.Thread(target=campaigns_loop, daemon=True).start()
     port = int(os.environ.get("PORT", 5001))
     app.run(host="0.0.0.0", port=port)
