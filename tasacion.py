@@ -69,10 +69,19 @@ def build_url(tipo: str, operacion: str, barrio: str, page: int = 1) -> str:
 def fetch_page(url: str) -> str | None:
     try:
         resp = requests.get(url, headers=HEADERS, timeout=20)
+        log.info("fetch_page %s -> status=%s size=%d", url, resp.status_code, len(resp.text))
         if resp.status_code == 403:
-            log.error("Blocked: %s", url)
+            log.error("Blocked (403): %s", url)
             return None
         if resp.status_code == 404:
+            log.error("Not found (404): %s", url)
+            return None
+        if resp.status_code != 200:
+            log.error("Unexpected status %s: %s", resp.status_code, url)
+            return None
+        # Check if Argenprop served a CAPTCHA/bot-detection page
+        if "IdAviso" not in resp.text and "Precio" not in resp.text:
+            log.error("No property data in response (possible bot block). First 200 chars: %s", resp.text[:200])
             return None
         resp.raise_for_status()
         return resp.text
