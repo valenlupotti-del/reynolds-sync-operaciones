@@ -238,11 +238,10 @@ def properties_sync_loop():
 
 
 def campaigns_loop():
-    # Wait 1 hour on startup, then run every Monday at ~9am
     time.sleep(3600)
     while True:
         now = datetime.now()
-        if now.weekday() == 0 and now.hour == 9:  # Monday 9am
+        if now.weekday() == 6 and now.hour == 20:  # Sunday 8pm
             try:
                 create_campaigns.run()
             except Exception:
