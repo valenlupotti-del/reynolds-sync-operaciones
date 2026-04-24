@@ -133,6 +133,8 @@ def insert_operacion(data: dict) -> dict | None:
         json=row,
         timeout=15,
     )
+    if not resp.ok:
+        log.error("Supabase error %s: %s", resp.status_code, resp.text)
     resp.raise_for_status()
     result = resp.json()
     return result[0] if result else None
