@@ -82,10 +82,14 @@ def fetch_page(url: str) -> str | None:
 
 
 def _get_hidden(html: str, name: str) -> str | None:
-    m = re.search(rf'<input[^>]+name="{name}"[^>]+value="([^"]*)"', html)
-    if not m:
-        m = re.search(rf'<input[^>]+value="([^"]*)"[^>]+name="{name}"', html)
-    return html_lib.unescape(m.group(1)) if m else None
+    # Match <input ... name="X" ... value="Y" /> in any attribute order
+    # Strategy: find the whole input tag that contains name="X", then extract value from it
+    for tag in re.findall(r'<input[^>]+>', html):
+        if f'name="{name}"' in tag or f"name='{name}'" in tag:
+            vm = re.search(r'value="([^"]*)"', tag)
+            if vm:
+                return html_lib.unescape(vm.group(1))
+    return None
 
 
 def _strip_tags(s: str) -> str:
@@ -129,16 +133,17 @@ def scrape_listing_url(url: str) -> dict | None:
         except ValueError:
             pass
 
-    # If not in page, try ShareDescription "90m2"
+    # If not in page, try ShareDescription or ShareTitle "90m2" / "398m2"
     if not superficie:
-        desc = _get_hidden(html, "ShareDescription") or ""
-        sm = re.search(r"(\d+)\s*m2", desc, re.IGNORECASE)
-        if sm:
-            try:
-                superficie = float(sm.group(1))
-            except ValueError:
-                pass
-
+        for field in ("ShareDescription", "ShareTitle"):
+            text = _get_hidden(html, field) or ""
+            sm = re.search(r"(\d+)\s*m2", text, re.IGNORECASE)
+            if sm:
+                try:
+                    superficie = float(sm.group(1))
+                    break
+                except ValueError:
+                    pass
     # --- Barrio from breadcrumb (5th item: Argenprop > tipo > operacion > ciudad > barrio) ---
     breadcrumbs = re.findall(r'<li[^>]*breadcrumb[^>]*>(.*?)</li>', html, re.DOTALL)
     barrio_raw = breadcrumbs[4] if len(breadcrumbs) > 4 else (breadcrumbs[-1] if breadcrumbs else "")
