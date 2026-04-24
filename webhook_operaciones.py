@@ -455,6 +455,19 @@ def health():
     return jsonify({"status": "ok"}), 200
 
 
+@app.route("/sync/contacts", methods=["GET", "POST"])
+def trigger_contacts_sync():
+    def _run():
+        try:
+            log.info("Manual contacts sync triggered via endpoint")
+            sync_contacts.run()
+            log.info("Manual contacts sync complete")
+        except Exception:
+            log.exception("Error in manual contacts sync")
+    threading.Thread(target=_run, daemon=True).start()
+    return jsonify({"status": "sync started"}), 200
+
+
 # ---------------------------------------------------------------------------
 # Tasacion webhook — asesor fills Tally with 4 comparable links
 # ---------------------------------------------------------------------------
