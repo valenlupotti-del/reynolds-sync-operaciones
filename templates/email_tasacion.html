@@ -22,9 +22,9 @@
 
         <tr>
           <td style="background:linear-gradient(135deg,#2563EB 0%,#1B3A6B 100%);border-radius:12px 12px 0 0;padding:52px 40px 40px;text-align:center;">
-            <p style="margin:0 0 12px;font-size:13px;font-weight:700;color:#93c5fd;letter-spacing:3px;text-transform:uppercase;">¡Tasación lista!</p>
-            <h1 style="margin:0 0 16px;font-size:30px;font-weight:800;color:#ffffff;line-height:1.3;">Ya conocés el valor<br>real de tu propiedad 📊</h1>
-            <p style="margin:0 auto;font-size:15px;color:#bfdbfe;line-height:1.8;max-width:400px;">Gracias por elegirnos para conocer el verdadero potencial de tu inmueble.</p>
+            <p style="margin:0 0 12px;font-size:13px;font-weight:700;color:#93c5fd;letter-spacing:3px;text-transform:uppercase;">Tasacion lista</p>
+            <h1 style="margin:0 0 16px;font-size:30px;font-weight:800;color:#ffffff;line-height:1.3;">Ya conoces el valor<br>real de tu propiedad</h1>
+            <p style="margin:0 auto;font-size:15px;color:#bfdbfe;line-height:1.8;max-width:400px;">Analisis de mercado basado en {LISTINGS_COUNT} propiedades comparables en {BARRIO}.</p>
           </td>
         </tr>
 
@@ -32,19 +32,64 @@
           <td style="background:#ffffff;border-radius:0 0 12px 12px;padding:40px 40px 44px;">
 
             <p style="margin:0 0 20px;font-size:16px;color:#333333;line-height:1.7;">
-              Hola <strong>{NOMBRE_CLIENTE}</strong> 👋
+              Hola <strong>{NOMBRE_CLIENTE}</strong>
             </p>
 
-            <p style="margin:0 0 20px;font-size:15px;color:#555555;line-height:1.8;">
-              Quedamos muy contentos con la tasación que realizamos juntos. Conocer el valor real de una propiedad es el primer paso para tomar buenas decisiones, y nos alegra mucho haber podido acompañarte en ese proceso.
+            <p style="margin:0 0 28px;font-size:15px;color:#555555;line-height:1.8;">
+              Quedamos muy contentos con la tasacion que realizamos juntos. A continuacion te compartimos el analisis de mercado que preparamos para tu {TIPO_PROPIEDAD} en {BARRIO}.
             </p>
 
+            <!-- Market data block -->
+            <table width="100%" cellpadding="0" cellspacing="0" style="margin-bottom:28px;border-radius:10px;overflow:hidden;background:#f0f4ff;">
+              <tr>
+                <td style="padding:24px 28px;">
+                  <p style="margin:0 0 16px;font-size:11px;font-weight:700;color:#2563EB;letter-spacing:2px;text-transform:uppercase;">Mercado comparable &mdash; {TIPO_PROPIEDAD} en venta en {BARRIO}</p>
+
+                  <table width="100%" cellpadding="0" cellspacing="0">
+                    <tr>
+                      <td style="padding-bottom:10px;">
+                        <table width="100%" cellpadding="0" cellspacing="0">
+                          <tr>
+                            <td style="font-size:13px;color:#555555;">Precio promedio por m&sup2;</td>
+                            <td align="right" style="font-size:16px;font-weight:700;color:#1B3A6B;">USD {USD_M2_PROMEDIO}/m&sup2;</td>
+                          </tr>
+                        </table>
+                      </td>
+                    </tr>
+                    <tr>
+                      <td style="padding-bottom:10px;border-top:1px solid #dce5ff;padding-top:10px;">
+                        <table width="100%" cellpadding="0" cellspacing="0">
+                          <tr>
+                            <td style="font-size:13px;color:#555555;">Precio mediano por m&sup2;</td>
+                            <td align="right" style="font-size:16px;font-weight:700;color:#1B3A6B;">USD {USD_M2_MEDIANA}/m&sup2;</td>
+                          </tr>
+                        </table>
+                      </td>
+                    </tr>
+                    <tr>
+                      <td style="padding-bottom:0;border-top:1px solid #dce5ff;padding-top:10px;">
+                        <table width="100%" cellpadding="0" cellspacing="0">
+                          <tr>
+                            <td style="font-size:13px;color:#555555;">Rango del mercado</td>
+                            <td align="right" style="font-size:14px;font-weight:600;color:#555555;">USD {USD_M2_MIN} &mdash; USD {USD_M2_MAX}/m&sup2;</td>
+                          </tr>
+                        </table>
+                      </td>
+                    </tr>
+                  </table>
+                </td>
+              </tr>
+            </table>
+
+            <!-- Estimated value block (shown only if surface provided) -->
+            {ESTIMADO_BLOCK}
+
             <p style="margin:0 0 20px;font-size:15px;color:#555555;line-height:1.8;">
-              Esperamos que la información te sea de mucha utilidad y que puedas avanzar con claridad y confianza hacia lo que viene. Estamos para lo que necesites. 💙
+              Este analisis se baso en <strong>{LISTINGS_COUNT} propiedades comparables</strong> publicadas actualmente en Argenprop para {BARRIO}. Te recomendamos usarlo como referencia junto al criterio de tu asesor.
             </p>
 
             <p style="margin:0 0 32px;font-size:15px;color:#555555;line-height:1.8;">
-              Si tenés alguna duda sobre la tasación o querés dar el próximo paso, <strong>{ASESOR}</strong> está a tu disposición para ayudarte.
+              Si tenes alguna duda o queres dar el proximo paso, <strong>{ASESOR}</strong> esta a tu disposicion.
             </p>
 
             <table width="100%" cellpadding="0" cellspacing="0" style="margin:0 0 28px;">
@@ -52,7 +97,7 @@
             </table>
 
             <p style="margin:0;font-size:15px;color:#333333;line-height:1.7;">
-              Con mucho cariño,<br>
+              Con mucho carino,<br>
               <strong style="color:#2563EB;">Equipo Reynolds Propiedades</strong>
             </p>
 
@@ -61,8 +106,8 @@
 
         <tr>
           <td style="padding:24px 0 0;text-align:center;">
-            <p style="margin:0 0 6px;font-size:12px;color:#999999;">Reynolds Propiedades · reynoldspropiedades.com.ar</p>
-            <p style="margin:0;font-size:11px;color:#bbbbbb;">Este correo fue enviado automáticamente. Por consultas respondé a este email o contactá a tu asesor.</p>
+            <p style="margin:0 0 6px;font-size:12px;color:#999999;">Reynolds Propiedades &middot; reynoldspropiedades.com.ar</p>
+            <p style="margin:0;font-size:11px;color:#bbbbbb;">Este correo fue enviado automaticamente. Por consultas responde a este email o contacta a tu asesor.</p>
           </td>
         </tr>
 

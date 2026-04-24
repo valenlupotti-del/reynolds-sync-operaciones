@@ -12,6 +12,7 @@ from flask import Flask, request, jsonify
 import requests
 import sync_properties
 import create_campaigns
+import tasacion as tasacion_module
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 log = logging.getLogger(__name__)
@@ -229,6 +230,130 @@ def webhook():
 @app.route("/health", methods=["GET"])
 def health():
     return jsonify({"status": "ok"}), 200
+
+
+@app.route("/tasacion", methods=["GET"])
+def tasacion_endpoint():
+    """
+    GET /tasacion?barrio=Palermo&tipo=departamento&operacion=venta&superficie=85
+    Returns market price stats from Argenprop for property valuation.
+    """
+    barrio = request.args.get("barrio", "").strip()
+    if not barrio:
+        return jsonify({"error": "barrio is required"}), 400
+
+    tipo      = request.args.get("tipo", "departamento").strip()
+    operacion = request.args.get("operacion", "venta").strip()
+    superficie_raw = request.args.get("superficie")
+    superficie = None
+    if superficie_raw:
+        try:
+            superficie = float(superficie_raw)
+        except ValueError:
+            return jsonify({"error": "superficie must be a number"}), 400
+
+    try:
+        result = tasacion_module.tasacion(barrio, tipo, operacion, superficie)
+        return jsonify(result), 200
+    except Exception as e:
+        log.exception("Error in tasacion endpoint")
+        return jsonify({"error": str(e)}), 500
+
+
+@app.route("/tasacion/enviar", methods=["POST"])
+def tasacion_enviar():
+    """
+    POST /tasacion/enviar
+    Body JSON: {
+        "barrio": "Palermo",
+        "tipo": "departamento",
+        "operacion": "venta",
+        "superficie": 85,
+        "cliente_nombre": "Juan Perez",
+        "cliente_email": "juan@example.com",
+        "asesor": "Martin Reynolds"
+    }
+    Runs the Argenprop scraper and sends the tasacion email with market data.
+    """
+    body = request.get_json(force=True, silent=True) or {}
+
+    barrio         = (body.get("barrio") or "").strip()
+    cliente_nombre = (body.get("cliente_nombre") or "").strip()
+    cliente_email  = (body.get("cliente_email") or "").strip()
+
+    if not barrio or not cliente_nombre or not cliente_email:
+        return jsonify({"error": "barrio, cliente_nombre and cliente_email are required"}), 400
+
+    tipo       = (body.get("tipo") or "departamento").strip()
+    operacion  = (body.get("operacion") or "venta").strip()
+    asesor     = (body.get("asesor") or "tu asesor").strip()
+    superficie = body.get("superficie")
+    if superficie:
+        try:
+            superficie = float(superficie)
+        except (ValueError, TypeError):
+            superficie = None
+
+    try:
+        data = tasacion_module.tasacion(barrio, tipo, operacion, superficie)
+    except Exception as e:
+        log.exception("Tasacion scraping failed")
+        return jsonify({"error": f"scraping failed: {e}"}), 500
+
+    stats = data.get("stats")
+    if not stats:
+        return jsonify({"error": "No market data found for this search", "data": data}), 422
+
+    # Build estimated value block (only if superficie provided)
+    estimado_block = ""
+    if data.get("estimado"):
+        est = data["estimado"]
+        estimado_block = f"""
+            <table width="100%" cellpadding="0" cellspacing="0" style="margin-bottom:28px;border-radius:10px;overflow:hidden;background:#fff7ed;border:1px solid #fed7aa;">
+              <tr>
+                <td style="padding:24px 28px;">
+                  <p style="margin:0 0 12px;font-size:11px;font-weight:700;color:#c2410c;letter-spacing:2px;text-transform:uppercase;">Estimacion para {est['superficie_m2']:.0f} m&sup2;</p>
+                  <table width="100%" cellpadding="0" cellspacing="0">
+                    <tr>
+                      <td style="font-size:13px;color:#555555;padding-bottom:8px;">Valor estimado por mediana</td>
+                      <td align="right" style="font-size:22px;font-weight:800;color:#c2410c;padding-bottom:8px;">USD {est['valor_por_mediana']:,}</td>
+                    </tr>
+                    <tr>
+                      <td style="font-size:12px;color:#888888;">Rango del mercado</td>
+                      <td align="right" style="font-size:13px;color:#888888;">USD {est['rango_min']:,} &mdash; USD {est['rango_max']:,}</td>
+                    </tr>
+                  </table>
+                </td>
+              </tr>
+            </table>"""
+
+    # Load and fill template
+    template = load_template("tasacion")
+    if not template:
+        return jsonify({"error": "template not found"}), 500
+
+    html = (template
+        .replace("{NOMBRE_CLIENTE}", cliente_nombre)
+        .replace("{ASESOR}", asesor)
+        .replace("{BARRIO}", barrio)
+        .replace("{TIPO_PROPIEDAD}", tipo)
+        .replace("{LISTINGS_COUNT}", str(stats["count"]))
+        .replace("{USD_M2_PROMEDIO}", f"{stats['promedio_usd_m2']:,}")
+        .replace("{USD_M2_MEDIANA}", f"{stats['mediana_usd_m2']:,}")
+        .replace("{USD_M2_MIN}", f"{stats['minimo_usd_m2']:,}")
+        .replace("{USD_M2_MAX}", f"{stats['maximo_usd_m2']:,}")
+        .replace("{ESTIMADO_BLOCK}", estimado_block)
+    )
+
+    subject = f"Tasacion de tu {tipo} en {barrio} — Reynolds Propiedades"
+    try:
+        send_email(cliente_email, subject, html)
+        log.info("Tasacion email sent to %s (%s, %s)", cliente_email, tipo, barrio)
+    except Exception as e:
+        log.exception("Failed to send tasacion email to %s", cliente_email)
+        return jsonify({"error": f"email send failed: {e}"}), 500
+
+    return jsonify({"ok": True, "stats": stats, "estimado": data.get("estimado")}), 200
 
 
 def properties_sync_loop():
