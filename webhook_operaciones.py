@@ -11,6 +11,7 @@ from email.mime.text import MIMEText
 from flask import Flask, request, jsonify
 import requests
 import sync_properties
+import create_campaigns
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 log = logging.getLogger(__name__)
@@ -236,8 +237,21 @@ def properties_sync_loop():
         time.sleep(3600)  # every hour
 
 
+def campaigns_loop():
+    # Wait 1 hour on startup, then run every Monday at ~9am
+    time.sleep(3600)
+    while True:
+        now = datetime.now()
+        if now.weekday() == 0 and now.hour == 9:  # Monday 9am
+            try:
+                create_campaigns.run()
+            except Exception:
+                log.exception("Error creating campaigns")
+        time.sleep(3600)  # check every hour
+
+
 if __name__ == "__main__":
-    t = threading.Thread(target=properties_sync_loop, daemon=True)
-    t.start()
+    threading.Thread(target=properties_sync_loop, daemon=True).start()
+    threading.Thread(target=campaigns_loop, daemon=True).start()
     port = int(os.environ.get("PORT", 5001))
     app.run(host="0.0.0.0", port=port)
