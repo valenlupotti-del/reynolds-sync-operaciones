@@ -2,12 +2,10 @@ FROM python:3.11-slim
 
 WORKDIR /app
 
-RUN pip install requests
+RUN pip install flask requests
 
-COPY sync_contacts.py .
+COPY . .
 
-RUN echo "0 8 * * * cd /app && python sync_contacts.py >> /var/log/sync.log 2>&1" > /etc/cron.d/sync
-RUN chmod 0644 /etc/cron.d/sync
-RUN apt-get update && apt-get install -y cron && rm -rf /var/lib/apt/lists/*
+EXPOSE 5001
 
-CMD cron && tail -f /var/log/sync.log
+CMD ["python", "webhook_operaciones.py"]
