@@ -1,4 +1,5 @@
 from __future__ import annotations
+import io
 import os
 import json
 import uuid
@@ -9,6 +10,8 @@ import time
 from datetime import datetime
 from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
+from email.mime.base import MIMEBase
+from email import encoders
 from flask import Flask, request, jsonify
 import requests
 import sync_properties
@@ -93,17 +96,215 @@ def load_template(role: str) -> str | None:
         return None
 
 
-def send_email(to_email: str, subject: str, html_body: str):
-    msg = MIMEMultipart("alternative")
+def send_email(to_email: str, subject: str, html_body: str, attachments: list[tuple[str, bytes]] | None = None):
+    """
+    Send an HTML email with optional attachments.
+    attachments: list of (filename, bytes) tuples
+    """
+    msg = MIMEMultipart("mixed")
     msg["Subject"] = subject
     msg["From"] = f"{GMAIL_FROM_NAME} <{GMAIL_USER}>"
     msg["To"] = to_email
-    msg.attach(MIMEText(html_body, "html", "utf-8"))
+
+    alt = MIMEMultipart("alternative")
+    alt.attach(MIMEText(html_body, "html", "utf-8"))
+    msg.attach(alt)
+
+    for filename, data in (attachments or []):
+        part = MIMEBase("application", "octet-stream")
+        part.set_payload(data)
+        encoders.encode_base64(part)
+        part.add_header("Content-Disposition", f'attachment; filename="{filename}"')
+        msg.attach(part)
 
     with smtplib.SMTP_SSL("smtp.gmail.com", 465) as server:
         server.login(GMAIL_USER, GMAIL_APP_PASSWORD)
         server.sendmail(GMAIL_USER, to_email, msg.as_string())
     log.info("Email sent to %s", to_email)
+
+
+def build_tasacion_excel(subject_prop: dict, comparables: list[dict | None], ai_opinion: str = "") -> bytes:
+    """Generate an Excel comparison workbook and return as bytes."""
+    try:
+        from openpyxl import Workbook
+        from openpyxl.styles import Font, PatternFill, Alignment, Border, Side, numbers
+        from openpyxl.utils import get_column_letter
+    except ImportError:
+        log.error("openpyxl not installed")
+        return b""
+
+    wb = Workbook()
+
+    # ---- Sheet 1: Comparativa ----
+    ws = wb.active
+    ws.title = "Comparativa"
+
+    AZUL  = "1B3A6B"
+    ROJO  = "C0392B"
+    VERDE = "16A34A"
+    GRIS  = "F3F4F6"
+    AMARILLO = "FEF9C3"
+
+    def cell_style(cell, bold=False, bg=None, font_color="000000", size=11, align="left", wrap=False):
+        cell.font = Font(bold=bold, color=font_color, size=size)
+        if bg:
+            cell.fill = PatternFill("solid", fgColor=bg)
+        cell.alignment = Alignment(horizontal=align, vertical="center", wrap_text=wrap)
+
+    thin = Side(style="thin", color="D1D5DB")
+    border = Border(left=thin, right=thin, top=thin, bottom=thin)
+
+    # Title
+    ws.merge_cells("A1:F1")
+    ws["A1"] = "INFORME COMPARATIVO DE TASACION — Reynolds Propiedades"
+    cell_style(ws["A1"], bold=True, bg=AZUL, font_color="FFFFFF", size=13, align="center")
+    ws.row_dimensions[1].height = 28
+
+    ws.merge_cells("A2:F2")
+    ws["A2"] = f"Generado el {datetime.now().strftime('%d/%m/%Y %H:%M')}"
+    cell_style(ws["A2"], bg="E5E7EB", font_color="6B7280", size=9, align="center")
+    ws.row_dimensions[2].height = 16
+
+    # Header row
+    headers = ["Campo", "Tu propiedad"] + [f"Comparable {i+1}" for i in range(len([c for c in comparables if c is not None]))]
+    ws.row_dimensions[4].height = 22
+    for col, h in enumerate(headers, 1):
+        c = ws.cell(row=4, column=col, value=h)
+        bg = AMARILLO if col == 2 else AZUL
+        fc = "000000" if col == 2 else "FFFFFF"
+        cell_style(c, bold=True, bg=bg, font_color=fc, size=11, align="center")
+        c.border = border
+
+    # Data rows
+    valid_comps = [c for c in comparables if c is not None]
+    fields = [
+        ("Barrio",       lambda p: p.get("barrio") or "—"),
+        ("Direccion",    lambda p: (p.get("direccion") or "—")[:40]),
+        ("Tipo",         lambda p: p.get("tipo") or "—"),
+        ("Superficie",   lambda p: f"{int(p['superficie'])} m²" if p.get("superficie") else "—"),
+        ("Precio (USD)", lambda p: f"USD {int(p['precio']):,}".replace(",", ".") if p.get("precio") else "—"),
+        ("USD/m²",       lambda p: f"USD {int(p['usd_m2']):,}/m²".replace(",", ".") if p.get("usd_m2") else "—"),
+        ("Ambientes",    lambda p: str(p.get("ambientes") or "—")),
+    ]
+
+    for row_idx, (label, getter) in enumerate(fields, 5):
+        ws.row_dimensions[row_idx].height = 20
+        c = ws.cell(row=row_idx, column=1, value=label)
+        cell_style(c, bold=True, bg=GRIS, size=10)
+        c.border = border
+
+        # Subject property
+        c2 = ws.cell(row=row_idx, column=2, value=getter(subject_prop))
+        cell_style(c2, bg=AMARILLO, size=10, align="center")
+        c2.border = border
+
+        for ci, comp in enumerate(valid_comps, 3):
+            val = getter(comp)
+            c3 = ws.cell(row=row_idx, column=ci, value=val)
+            cell_style(c3, size=10, align="center")
+            c3.border = border
+
+    # USD/m2 average row
+    usd_m2_vals = [c["usd_m2"] for c in valid_comps if c.get("usd_m2")]
+    if usd_m2_vals:
+        avg = round(sum(usd_m2_vals) / len(usd_m2_vals))
+        row = len(fields) + 6
+        ws.merge_cells(f"A{row}:B{row}")
+        ws[f"A{row}"] = f"Promedio USD/m² comparables:  USD {avg:,}/m²".replace(",", ".")
+        cell_style(ws[f"A{row}"], bold=True, bg=VERDE, font_color="FFFFFF", size=11)
+        ws.row_dimensions[row].height = 22
+
+        sup = subject_prop.get("superficie")
+        if sup:
+            row2 = row + 1
+            val_est = round(avg * sup)
+            ws.merge_cells(f"A{row2}:B{row2}")
+            ws[f"A{row2}"] = f"Valor estimado ({int(sup)} m²):  USD {val_est:,}".replace(",", ".")
+            cell_style(ws[f"A{row2}"], bold=True, bg=ROJO, font_color="FFFFFF", size=11)
+            ws.row_dimensions[row2].height = 22
+
+    # Column widths
+    col_widths = [20, 22] + [22] * len(valid_comps)
+    for i, w in enumerate(col_widths, 1):
+        ws.column_dimensions[get_column_letter(i)].width = w
+
+    # ---- Sheet 2: Opinion IA ----
+    if ai_opinion:
+        ws2 = wb.create_sheet("Opinion IA")
+        ws2.merge_cells("A1:D1")
+        ws2["A1"] = "Opinion del mercado — generada por IA"
+        cell_style(ws2["A1"], bold=True, bg=AZUL, font_color="FFFFFF", size=12, align="center")
+        ws2.row_dimensions[1].height = 26
+
+        ws2.merge_cells("A3:D20")
+        ws2["A3"] = ai_opinion
+        ws2["A3"].alignment = Alignment(wrap_text=True, vertical="top")
+        ws2["A3"].font = Font(size=11)
+        ws2.row_dimensions[3].height = 200
+        for col in ["A", "B", "C", "D"]:
+            ws2.column_dimensions[col].width = 30
+
+    buf = io.BytesIO()
+    wb.save(buf)
+    return buf.getvalue()
+
+
+def generate_tasacion_opinion(subject_prop: dict, comparables: list[dict | None], avg_usd_m2: int | None) -> str:
+    """Use OpenAI to generate a professional valuation opinion paragraph."""
+    openai_key = os.environ.get("OPENAI_KEY", "")
+    if not openai_key:
+        return ""
+
+    comp_lines = []
+    for i, c in enumerate(comparables, 1):
+        if c:
+            sup = f"{int(c['superficie'])} m²" if c.get("superficie") else "?"
+            precio = f"USD {int(c['precio']):,}".replace(",", ".") if c.get("precio") else "?"
+            usd_m2 = f"USD {int(c['usd_m2']):,}/m²".replace(",", ".") if c.get("usd_m2") else "?"
+            comp_lines.append(f"  Comp {i}: {c.get('barrio','?')} — {c.get('tipo','?')} — {sup} — {precio} ({usd_m2})")
+
+    subject_lines = [
+        f"Barrio: {subject_prop.get('barrio','?')}",
+        f"Tipo: {subject_prop.get('tipo_propiedad') or subject_prop.get('tipo','?')}",
+        f"Superficie: {int(subject_prop['superficie'])} m²" if subject_prop.get("superficie") else "",
+        f"Precio estimado por el asesor: USD {int(subject_prop['precio']):,}".replace(",", ".") if subject_prop.get("precio") else "",
+        f"Promedio USD/m² de comparables: USD {avg_usd_m2:,}/m²".replace(",", ".") if avg_usd_m2 else "",
+    ]
+
+    prompt = f"""Sos un analista inmobiliario senior de Reynolds Propiedades, una inmobiliaria premium de zona norte de Buenos Aires.
+
+Propiedades comparable analizadas:
+{chr(10).join(comp_lines)}
+
+Propiedad a tasar:
+{chr(10).join(l for l in subject_lines if l)}
+
+Escribi un parrafo profesional (4-6 oraciones) que:
+1. Describa el posicionamiento de precio de la propiedad respecto al mercado
+2. Mencione si el precio esta por encima, dentro o por debajo del rango de comparables
+3. De una opinion sobre el valor de mercado
+4. Sea en tono profesional pero accesible, sin tecnicismos excesivos
+5. Sea en castellano argentino
+
+Respondé SOLO con el parrafo, sin titulos ni explicaciones."""
+
+    try:
+        resp = requests.post(
+            "https://api.openai.com/v1/chat/completions",
+            headers={"Authorization": f"Bearer {openai_key}", "Content-Type": "application/json"},
+            json={
+                "model": "gpt-4o-mini",
+                "messages": [{"role": "user", "content": prompt}],
+                "temperature": 0.7,
+                "max_tokens": 300,
+            },
+            timeout=30,
+        )
+        resp.raise_for_status()
+        return resp.json()["choices"][0]["message"]["content"].strip()
+    except Exception as e:
+        log.error("OpenAI opinion error: %s", e)
+        return ""
 
 
 def parse_tally_payload(payload: dict) -> dict:
@@ -315,6 +516,7 @@ def _build_tasacion_asesor_html(
     cliente_email: str,
     observaciones: str,
     approve_url: str,
+    ai_opinion: str = "",
 ) -> str:
     # Compute average USD/m2 from valid comparables
     valid_usd_m2 = [c["usd_m2"] for c in comparables if c and c.get("usd_m2")]
@@ -381,9 +583,17 @@ def _build_tasacion_asesor_html(
 
         {estimado_block}
         {obs_block}
+        {"" if not ai_opinion else f'''
+        <table width="100%" cellpadding="0" cellspacing="0" style="margin:20px 0;border-radius:8px;background:#f0f4ff;border:1px solid #c7d2fe;">
+          <tr><td style="padding:18px 20px;">
+            <p style="margin:0 0 6px;font-size:11px;font-weight:700;color:#3730a3;letter-spacing:2px;text-transform:uppercase;">Opinion IA del mercado</p>
+            <p style="margin:0;font-size:13px;color:#1e1b4b;line-height:1.7;">{ai_opinion}</p>
+          </td></tr>
+        </table>'''}
+        <p style="margin:0 0 8px;font-size:12px;color:#9ca3af;">El Excel con la comparativa completa va adjunto a este email.</p>
 
         <!-- Approve button -->
-        <table width="100%" cellpadding="0" cellspacing="0" style="margin-top:32px;">
+        <table width="100%" cellpadding="0" cellspacing="0" style="margin-top:24px;">
           <tr><td style="text-align:center;">
             <p style="margin:0 0 8px;font-size:13px;color:#6b7280;">Si los datos son correctos, hace clic para enviar al cliente:</p>
             <a href="{approve_url}" style="display:inline-block;padding:16px 40px;background:#16a34a;color:#ffffff;font-size:15px;font-weight:700;text-decoration:none;border-radius:8px;">Aprobar y enviar al cliente</a>
@@ -409,6 +619,7 @@ def _build_tasacion_cliente_html(
     cliente_nombre: str,
     asesor_nombre: str,
     observaciones: str,
+    ai_opinion: str = "",
 ) -> str:
     valid_usd_m2 = [c["usd_m2"] for c in comparables if c and c.get("usd_m2")]
     avg_usd_m2 = round(sum(valid_usd_m2) / len(valid_usd_m2)) if valid_usd_m2 else None
@@ -473,6 +684,14 @@ def _build_tasacion_cliente_html(
 
         {estimado_block}
         {obs_block}
+        {"" if not ai_opinion else f'''
+        <table width="100%" cellpadding="0" cellspacing="0" style="margin:20px 0;border-radius:10px;background:#f8faff;border:1px solid #dbeafe;">
+          <tr><td style="padding:20px 24px;">
+            <p style="margin:0 0 8px;font-size:11px;font-weight:700;color:#1d4ed8;letter-spacing:2px;text-transform:uppercase;">Analisis del mercado</p>
+            <p style="margin:0;font-size:14px;color:#1e3a5f;line-height:1.8;">{ai_opinion}</p>
+          </td></tr>
+        </table>'''}
+        <p style="margin:16px 0 0;font-size:12px;color:#9ca3af;">El informe completo con la comparativa detallada va adjunto como archivo Excel.</p>
 
         <table width="100%" cellpadding="0" cellspacing="0" style="margin:28px 0 0;border-top:1px solid #e5e7eb;padding-top:24px;">
           <tr><td>
@@ -570,10 +789,25 @@ def webhook_tasacion():
 
     observaciones = data.get("observaciones") or ""
 
+    # Compute avg USD/m2 from comparables
+    valid_usd_m2 = [c["usd_m2"] for c in comparables if c and c.get("usd_m2")]
+    avg_usd_m2 = round(sum(valid_usd_m2) / len(valid_usd_m2)) if valid_usd_m2 else None
+
+    # Generate AI opinion
+    log.info("Generating AI opinion for tasacion...")
+    ai_opinion = generate_tasacion_opinion(subject_prop, comparables, avg_usd_m2)
+    if ai_opinion:
+        log.info("AI opinion generated (%d chars)", len(ai_opinion))
+
+    # Generate Excel
+    excel_bytes = build_tasacion_excel(subject_prop, comparables, ai_opinion)
+    excel_filename = f"tasacion_{tasacion_module.slugify(subject_prop.get('barrio','propiedad'))}_{datetime.now().strftime('%Y%m%d')}.xlsx"
+    attachments = [(excel_filename, excel_bytes)] if excel_bytes else []
+
     # Generate approve token and store pending email
     token = str(uuid.uuid4())
     client_html = _build_tasacion_cliente_html(
-        subject_prop, comparables, cliente_nombre, asesor_nombre, observaciones
+        subject_prop, comparables, cliente_nombre, asesor_nombre, observaciones, ai_opinion
     )
     client_subject = f"Tasacion de tu {subject_prop['tipo']} en {subject_prop['barrio']} — Reynolds Propiedades"
 
@@ -583,20 +817,21 @@ def webhook_tasacion():
         "cliente_email":   cliente_email,
         "cliente_nombre":  cliente_nombre,
         "asesor_nombre":   asesor_nombre,
+        "attachments":     attachments,
         "created_at":      time.time(),
     }
 
-    # Build the approval URL — use SERVER_URL env var or fall back to request host
+    # Build the approval URL
     server_url = os.environ.get("SERVER_URL", request.host_url.rstrip("/"))
     approve_url = f"{server_url}/tasacion/aprobar?token={token}"
 
-    # Build and send asesor review email
+    # Build and send asesor review email (with Excel attached)
     asesor_html = _build_tasacion_asesor_html(
         subject_prop, comparables, asesor_nombre, cliente_nombre, cliente_email,
-        observaciones, approve_url,
+        observaciones, approve_url, ai_opinion,
     )
     try:
-        send_email(asesor_email, f"[REVISAR] Tasacion para {cliente_nombre}", asesor_html)
+        send_email(asesor_email, f"[REVISAR] Tasacion para {cliente_nombre}", asesor_html, attachments)
         log.info("Tasacion review email sent to asesor %s", asesor_email)
     except Exception as e:
         log.exception("Failed to email asesor %s", asesor_email)
@@ -609,7 +844,7 @@ def webhook_tasacion():
 def tasacion_aprobar():
     """
     GET /tasacion/aprobar?token=xxx
-    Asesor clicks this link to approve and send the comparison email to the client.
+    Asesor clicks this to approve and send the comparison email + Excel to the client.
     """
     token = request.args.get("token", "").strip()
     if not token or token not in _pending_tasaciones:
@@ -617,12 +852,16 @@ def tasacion_aprobar():
 
     pending = _pending_tasaciones.pop(token)
 
-    # Expire after 48h
     if time.time() - pending["created_at"] > 48 * 3600:
         return "<h2>Este link expiro (48 horas). Pedi uno nuevo desde Tally.</h2>", 400
 
     try:
-        send_email(pending["cliente_email"], pending["subject"], pending["html"])
+        send_email(
+            pending["cliente_email"],
+            pending["subject"],
+            pending["html"],
+            pending.get("attachments"),
+        )
         log.info("Tasacion email sent to client %s after asesor approval", pending["cliente_email"])
     except Exception as e:
         log.exception("Failed to send tasacion to client %s", pending["cliente_email"])
