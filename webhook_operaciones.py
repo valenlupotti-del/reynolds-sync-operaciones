@@ -36,7 +36,6 @@ TALLY_FIELD_MAP = {
     "Asesor":                           "asesor_nombre",
     "Sucursal":                         "sucursal",
     "Fecha de firma":                   "fecha_firma",
-    "Código referencia de la propiedad": "tokko_ref",
     "Dirección de la propiedad":        "direccion",
     "Tipo de propiedad":                "tipo_propiedad",
     "Tipo de Operación":                "tipo_operacion",
