@@ -71,7 +71,7 @@ def parse_property(p: dict) -> dict:
     branch = p.get("branch") or {}
     prop_type = p.get("type") or {}
 
-    activa = p.get("deleted_at") is None
+    activa = True  # API only returns active properties
 
     return {
         "ref": p.get("reference_code"),
@@ -109,6 +109,7 @@ def parse_property(p: dict) -> dict:
         "propietario_celular": None,
         "emprendimiento": (p.get("development") or {}).get("name") if p.get("development") else None,
         "activa": activa,
+        "public_url": p.get("public_url"),
     }
 
 
@@ -139,6 +140,27 @@ def run():
             upsert_properties(batch)
             log.info("Upserted batch %d-%d", i, i + len(batch))
         log.info("Properties sync complete: %d properties", len(rows))
+
+        # Mark as inactive any property no longer in Tokko
+        active_refs = [r["ref"] for r in rows]
+        deactivate_resp = requests.post(
+            f"{SUPABASE_URL}/rest/v1/rpc/deactivate_missing_properties",
+            headers={**SUPABASE_HEADERS, "Content-Type": "application/json"},
+            json={"active_refs": active_refs},
+            timeout=15,
+        )
+        if deactivate_resp.ok:
+            log.info("Deactivated missing properties")
+        else:
+            # Fallback: direct update
+            refs_str = '("' + '","'.join(active_refs) + '")'
+            requests.patch(
+                f"{SUPABASE_URL}/rest/v1/properties?ref=not.in.{refs_str}",
+                headers={**SUPABASE_HEADERS, "Content-Type": "application/json"},
+                json={"activa": False},
+                timeout=15,
+            )
+            log.info("Marked missing properties as inactive")
     except Exception:
         log.exception("Properties sync failed")
 
