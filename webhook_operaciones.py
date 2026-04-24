@@ -3,11 +3,14 @@ import os
 import json
 import smtplib
 import logging
+import threading
+import time
 from datetime import datetime
 from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
 from flask import Flask, request, jsonify
 import requests
+import sync_properties
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 log = logging.getLogger(__name__)
@@ -227,6 +230,14 @@ def health():
     return jsonify({"status": "ok"}), 200
 
 
+def properties_sync_loop():
+    while True:
+        sync_properties.run()
+        time.sleep(3600)  # every hour
+
+
 if __name__ == "__main__":
+    t = threading.Thread(target=properties_sync_loop, daemon=True)
+    t.start()
     port = int(os.environ.get("PORT", 5001))
     app.run(host="0.0.0.0", port=port)
