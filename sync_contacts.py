@@ -110,7 +110,6 @@ def upsert_brevo_batch(contacts: list[dict]):
     ]
 
     payload = {
-        "listIds":       [BREVO_LIST_ID],
         "jsonBody":      brevo_contacts,
         "updateEnabled": True,
     }
